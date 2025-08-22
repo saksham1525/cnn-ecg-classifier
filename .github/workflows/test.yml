@@ -1,0 +1,60 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.8, 3.9, '3.10']
+
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest
+    
+    - name: Lint with flake8
+      run: |
+        pip install flake8
+        # Stop build if there are Python syntax errors or undefined names
+        flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        # Exit-zero treats all errors as warnings
+        flake8 src/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+    
+    - name: Test imports and basic functionality
+      run: |
+        cd src
+        python -c "
+        import models, data, metrics
+        print('✓ All modules import successfully')
+        
+        # Test model creation
+        from models import create_model
+        model1d = create_model('cnn1d', 5)
+        model2d = create_model('cnn2d', 5)
+        print('✓ Models create successfully')
+        
+        # Test metrics
+        import numpy as np
+        from metrics import compute_metrics
+        y_true = np.random.randint(0, 2, (10, 5))
+        y_pred = np.random.random((10, 5))
+        metrics = compute_metrics(y_true, y_pred)
+        print('✓ Metrics computation works')
+        
+        print('🎉 All basic tests passed!')
+        "
