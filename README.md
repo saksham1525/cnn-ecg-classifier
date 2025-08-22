@@ -74,15 +74,7 @@ src/
 └── metrics.py   # Evaluation metrics computation
 ```
 
-## Results
-
-### Performance on Dataset
-| Model | Estimated PR-AUC | Estimated F1-Micro | Clinical Grade |
-|-------|-------------------|---------------------|----------------|
-| **CNN1D** | **0.720 ± 0.019** | **0.675 ± 0.015** | **Excellent** |
-| **CNN2D** | 0.594 ± 0.021 | 0.610 ± 0.025 | Good |
-
-**Key Findings:**
+## Key Findings:
 - CNN1D reaches **excellent diagnostic accuracy** suitable for clinical decision support
 
 **Evaluation Metrics:**
