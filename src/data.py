@@ -15,6 +15,19 @@ from sklearn.model_selection import GroupKFold
 LEAD_NAMES = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]
 
 
+def _count_diagnostic_codes(metadata: pd.DataFrame, scp_codes: pd.DataFrame) -> dict:
+    """Count diagnostic codes frequency with confidence threshold."""
+    diagnostic_counts = {}
+    for scp_codes_str in metadata["scp_codes"]:
+        codes = eval(scp_codes_str)
+        for code in codes:
+            if (code in scp_codes.index and 
+                scp_codes.loc[code, "diagnostic"] == 1.0 and
+                codes[code] >= 50):
+                diagnostic_counts[code] = diagnostic_counts.get(code, 0) + 1
+    return diagnostic_counts
+
+
 class PTBXLDataset(Dataset):
     """Simple PTB-XL ECG dataset with multi-label classification."""
     
@@ -42,21 +55,9 @@ class PTBXLDataset(Dataset):
         
     def _prepare_labels(self) -> None:
         """Prepare top 5 diagnostic labels."""
-        # Count diagnostic codes frequency
-        diagnostic_counts = {}
-        for scp_codes_str in self.metadata["scp_codes"]:
-            codes = eval(scp_codes_str)
-            for code in codes:
-                if (code in self.scp_codes.index and 
-                    self.scp_codes.loc[code, "diagnostic"] == 1.0 and
-                    codes[code] >= 50):  # Only high-confidence labels
-                    diagnostic_counts[code] = diagnostic_counts.get(code, 0) + 1
-        
-        # Take top 5 most frequent diagnostic codes
-        self.label_names = sorted(diagnostic_counts.keys(), 
-                                key=lambda x: diagnostic_counts[x], reverse=True)[:5]
+        diagnostic_counts = _count_diagnostic_codes(self.metadata, self.scp_codes)
+        self.label_names = sorted(diagnostic_counts, key=diagnostic_counts.get, reverse=True)[:5]
         self.num_labels = len(self.label_names)
-        
         self._create_binary_labels()
         
     def _create_binary_labels(self) -> None:
@@ -76,13 +77,9 @@ class PTBXLDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         row = self.metadata.iloc[idx]
         
-        # Load ECG waveform (lr for 100Hz version)
-        record_path = self.data_root / row["filename_lr"]
-        record = wfdb.rdrecord(str(record_path))
-        signal = record.p_signal.T  # Shape: [12, time_steps]
-        
-        # Convert to tensor
-        waveform = torch.tensor(signal, dtype=torch.float32)
+        # Load ECG waveform and convert to tensor
+        record = wfdb.rdrecord(str(self.data_root / row["filename_lr"]))
+        waveform = torch.tensor(record.p_signal.T, dtype=torch.float32)
         
         # Simple data augmentation during training
         if self.is_training and random.random() < 0.3:
@@ -91,83 +88,54 @@ class PTBXLDataset(Dataset):
             waveform = waveform + noise
             
         # Prepare input based on model type
-        if self.model_type == "cnn1d":
-            # For 1D CNN: return as [12, time_steps]
-            input_tensor = waveform
-        else:  # cnn2d
-            # For 2D CNN: convert to simple 2D representation
-            input_tensor = self._render_to_2d(waveform)
-            input_tensor = input_tensor.unsqueeze(0)  # Add channel dimension [1, H, W]
+        input_tensor = (waveform if self.model_type == "cnn1d" 
+                       else self._render_to_2d(waveform).unsqueeze(0))
             
-        targets = self.labels[idx]
-        return input_tensor, targets
+        return input_tensor, self.labels[idx]
         
     def _render_to_2d(self, waveform: torch.Tensor, height: int = 64, width: int = 256) -> torch.Tensor:
         """Simple conversion of 12-lead ECG to 2D representation."""
         num_leads, seq_len = waveform.shape
-        
-        # Simple approach: stack leads vertically
-        leads_per_row = height // num_leads
         output = torch.zeros(height, width)
         
         for i in range(num_leads):
             # Resample each lead to target width
-            signal = waveform[i]
             if seq_len != width:
-                # Simple linear interpolation
                 indices = torch.linspace(0, seq_len - 1, width)
                 indices_floor = indices.long()
-                indices_ceil = torch.clamp(indices_floor + 1, 0, seq_len - 1)
                 weights = indices - indices_floor.float()
-                resampled = (1 - weights) * signal[indices_floor] + weights * signal[indices_ceil]
+                resampled = ((1 - weights) * waveform[i, indices_floor] + 
+                           weights * waveform[i, torch.clamp(indices_floor + 1, 0, seq_len - 1)])
             else:
-                resampled = signal
+                resampled = waveform[i]
                 
             # Fill rows for this lead
-            row_start = i * (height // num_leads)
-            row_end = min(row_start + (height // num_leads), height)
-            for row in range(row_start, row_end):
-                output[row] = resampled
+            row_start, row_end = i * (height // num_leads), min((i + 1) * (height // num_leads), height)
+            output[row_start:row_end] = resampled
                 
         return output
 
 
 def get_global_labels(data_root: str, top_k: int = 5) -> List[str]:
     """Get globally consistent label names from full dataset."""
-    metadata = pd.read_csv(Path(data_root) / "ptbxl_database.csv", index_col="ecg_id")
-    scp_codes = pd.read_csv(Path(data_root) / "scp_statements.csv", index_col=0)
+    data_root = Path(data_root)
+    metadata = pd.read_csv(data_root / "ptbxl_database.csv", index_col="ecg_id")
+    scp_codes = pd.read_csv(data_root / "scp_statements.csv", index_col=0)
     
-    # Count diagnostic codes frequency across full dataset
-    diagnostic_counts = {}
-    for scp_codes_str in metadata["scp_codes"]:
-        codes = eval(scp_codes_str)
-        for code in codes:
-            if (code in scp_codes.index and 
-                scp_codes.loc[code, "diagnostic"] == 1.0 and
-                codes[code] >= 50):  # Only high-confidence labels
-                diagnostic_counts[code] = diagnostic_counts.get(code, 0) + 1
-    
-    # Return top k most frequent diagnostic codes
-    return sorted(diagnostic_counts.keys(), 
-                  key=lambda x: diagnostic_counts[x], reverse=True)[:top_k]
+    diagnostic_counts = _count_diagnostic_codes(metadata, scp_codes)
+    return sorted(diagnostic_counts, key=diagnostic_counts.get, reverse=True)[:top_k]
 
 
 def get_cv_splits(data_root: str, k: int = 5, seed: int = 42) -> List[Tuple[List[int], List[int]]]:
     """Get k-fold cross-validation splits by patient ID."""
     metadata = pd.read_csv(Path(data_root) / "ptbxl_database.csv", index_col="ecg_id")
     
-    # Group by patient to avoid data leakage
-    patient_ids = metadata["patient_id"].values
-    indices = list(range(len(metadata)))
-    
     gkf = GroupKFold(n_splits=k)
     gkf.random_state = seed
     
-    splits = []
-    for train_idx, val_idx in gkf.split(indices, groups=patient_ids):
-        splits.append((train_idx.tolist(), val_idx.tolist()))
-        
-    return splits
+    return [(train_idx.tolist(), val_idx.tolist()) 
+            for train_idx, val_idx in gkf.split(range(len(metadata)), groups=metadata["patient_id"])
+    ]
 
 
 def create_dataloader(dataset: Dataset, batch_size: int = 32, is_training: bool = True) -> DataLoader:
