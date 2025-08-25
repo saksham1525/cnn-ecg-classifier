@@ -1,3 +1,27 @@
+[tool.poetry]
+name = "cnn-ecg-classifier"
+version = "0.1.0"
+packages = [{include = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+torch = "*"
+numpy = "*"
+pandas = "*"
+scikit-learn = "*"
+wfdb = "*"
+matplotlib = "*"
+pyyaml = "*"
+
+[tool.poetry.group.dev.dependencies]
+black = "*"
+flake8 = "*"
+pytest = "*"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
 [tool.black]
 line-length = 88
 target-version = ['py310']
