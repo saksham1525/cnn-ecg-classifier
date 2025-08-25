@@ -37,7 +37,8 @@ Download PTB-XL dataset to `data/ptbxl/` following instructions at https://physi
 
 **Installation:**
 ```bash
-pip install -r requirements.txt
+poetry install
+poetry shell
 ```
 
 **Training (5-fold cross-validation):**
